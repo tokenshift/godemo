@@ -22,7 +22,6 @@ type DemoVariables []DemoVariable
 type DemoVariable struct {
 	Name  string
 	Value string
-	Cmd   string
 	Echo  bool
 }
 
@@ -81,7 +80,7 @@ func (v DemoVariables) mapping(key string) string {
 		}
 	}
 
-	return ""
+	return fmt.Sprintf("${%s}", key)
 }
 
 func (v DemoVariables) sanitize(key string) string {
@@ -95,7 +94,7 @@ func (v DemoVariables) sanitize(key string) string {
 		}
 	}
 
-	return ""
+	return fmt.Sprintf("${%s}", key)
 }
 
 func RunDemo(steps DemoStepList, vars DemoVariables) error {
@@ -104,7 +103,7 @@ func RunDemo(steps DemoStepList, vars DemoVariables) error {
 	var err error
 
 	for {
-		action, ok, err = action(steps, vars)
+		action, ok, err = action(steps, &vars)
 
 		if err != nil {
 			return err

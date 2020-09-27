@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -19,16 +21,18 @@ type DemoRun struct {
 	Variables DemoVariables
 }
 
-type DemoAction func(DemoStepList, DemoVariables) (DemoAction, bool, error)
+type DemoAction func(DemoStepList, *DemoVariables) (DemoAction, bool, error)
 
 var (
 	CommandFormat = color.New(color.FgGreen, color.Bold)
 	CommentFormat = color.New(color.FgCyan)
 	ErrorFormat   = color.New(color.FgHiRed, color.Bold)
+	PromptFormat  = color.New(color.FgBlue)
+	TitleFormat   = color.New(color.FgHiCyan, color.Bold)
 )
 
 func DisplayStepN(stepIndex int) DemoAction {
-	return func(steps DemoStepList, vars DemoVariables) (DemoAction, bool, error) {
+	return func(steps DemoStepList, vars *DemoVariables) (DemoAction, bool, error) {
 		if stepIndex < 0 {
 			stepIndex = 0
 		}
@@ -47,7 +51,11 @@ func DisplayStepN(stepIndex int) DemoAction {
 		// Echo the command to be run (sanitized) if there is one
 		if step.Cmd != "" {
 			cmd := os.Expand(strings.TrimSpace(step.Cmd), vars.sanitize)
-			CommandFormat.Printf("(%d) $ %s\n", stepIndex+1, cmd)
+			if step.Capture != "" {
+				CommandFormat.Printf("(%d) $ %s=$(%s)\n", stepIndex+1, step.Capture, cmd)
+			} else {
+				CommandFormat.Printf("(%d) $ %s\n", stepIndex+1, cmd)
+			}
 		}
 
 		// If there was neither, move on to the next step
@@ -63,7 +71,7 @@ func DisplayStepN(stepIndex int) DemoAction {
 }
 
 func ExecuteStepN(stepIndex int) DemoAction {
-	return func(steps DemoStepList, vars DemoVariables) (DemoAction, bool, error) {
+	return func(steps DemoStepList, vars *DemoVariables) (DemoAction, bool, error) {
 		if stepIndex < 0 {
 			stepIndex = 0
 		}
@@ -90,22 +98,44 @@ func ExecuteStepN(stepIndex int) DemoAction {
 		}
 
 		cmd := exec.Command(args[0], args[1:]...)
+
+		// Prepare to capture STDOUT
+		var stdout bytes.Buffer
+		io.MultiWriter(os.Stdout, &stdout)
+
 		if step.Echo {
-			cmd.Stdout = os.Stdout
+			cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
 			cmd.Stderr = os.Stderr
+		} else {
+			cmd.Stdout = &stdout
 		}
 
 		err = cmd.Run()
 		if err != nil {
 			ErrorFormat.Println("ERROR:", err)
+		} else {
+			fmt.Println()
 		}
+
+		if step.Capture != "" {
+			*vars = append(*vars, DemoVariable{
+				Name:  step.Capture,
+				Value: string(stdout.Bytes()),
+				Echo:  step.Echo,
+			})
+
+			PromptFormat.Printf("Captured in $%s\n", step.Capture)
+		}
+
+		// TODO: Need to actually prompt here, for long-running actions there's no
+		// indication that it completed.
 
 		action, err := PromptForAction(stepIndex, DisplayStepN(stepIndex+1))
 		return action, err == nil, err
 	}
 }
 
-func ExitDemo(DemoStepList, DemoVariables) (DemoAction, bool, error) {
+func ExitDemo(DemoStepList, *DemoVariables) (DemoAction, bool, error) {
 	return nil, false, nil
 }
 
@@ -115,11 +145,12 @@ func DisplayValidNextSteps() {
 (p)prev  - Go back to the last step
 (r)eplay - Repeat the same step
 (q)uit   - Exit the demo
-{number} - Goto a specific step
-`)
+{number} - Goto a specific step`)
 }
 
 func PromptForAction(currentIndex int, defaultAction DemoAction) (DemoAction, error) {
+	PromptFormat.Print(": ")
+
 	input, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
 		return ExitDemo, err
